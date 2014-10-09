@@ -2855,19 +2855,116 @@ out0:
 	return error;
 }
 
+static struct vfsmount *create_rootfs(int flags)
+{
+	struct file_system_type *type;
+	struct vfsmount *mnt;
+
+	type = get_fs_type("rootfs");
+	if (!type)
+		return NULL;
+		panic("Can't find rootfs type");
+	mnt = vfs_kern_mount(type, flags, "rootfs", NULL);
+	put_filesystem(type);
+	if (IS_ERR(mnt))
+		return NULL;
+
+	return mnt;
+}
+
+#define MNTNS_CHANGE_ROOT_CHDIR 1
+#define MNTNS_CHANGE_ROOT_CHROOT 2
+
+/*
+ * Rough notes:
+ *
+ * - Constant time.
+ * - Flexible chroot/chdir.
+ * - Independent of prior rootfs state (and detaches rootfs).
+ * - Easier to use than pivot_root (no worrying about put_old).
+ */
+SYSCALL_DEFINE3(mntns_change_root,
+		int, dfd, const char __user *, name,
+		int, flags)
+{
+	struct path path, parent_path;
+	struct mount *mnt;
+	struct vfsmount *newnsroot;
+	struct mnt_namespace *ns = current->nsproxy->mnt_ns;
+	int retval;
+
+	if (flags & ~(MNTNS_CHANGE_ROOT_CHDIR | MNTNS_CHANGE_ROOT_CHROOT))
+		return -EINVAL;
+
+	if (!may_mount())
+		return -EPERM;
+
+	if (current_chrooted())
+		return -EPERM;
+
+	if (!ns_capable(ns->user_ns, CAP_SYS_ADMIN))
+		return -EPERM;
+
+	retval = user_path_mountpoint_at(dfd, name, 0, &path);
+	if (retval)
+		return retval;
+	mnt = real_mount(path.mnt);
+
+	retval = security_path_chroot(&path);
+	if (retval)
+		goto put_and_out;
+
+	newnsroot = create_rootfs(MS_RDONLY);
+	if (!newnsroot)
+		return -ENOMEM;		/* This is the only reasonable cause. */
+
+	namespace_lock();
+
+	retval = -EINVAL;
+	if (!check_mnt(mnt))
+		goto unlock_and_out;
+	if (!mnt_has_parent(mnt))
+		goto unlock_and_out;
+	if (path.dentry != path.mnt->mnt_root)
+		goto unlock_and_out;
+	if (path.mnt->mnt_flags & MNT_LOCKED)
+		goto unlock_and_out;
+
+	lock_mount_hash();
+	detach_mnt(mnt, &parent_path);
+	path_put(&parent_path);
+
+	mntput(&ns->root->mnt);
+	mnt->mnt_ns = ns;
+	ns->root = mnt;
+	list_del(&mnt->mnt_list);
+	list_add(&mnt->mnt_list, &ns->list);
+
+	if (flags & MNTNS_CHANGE_ROOT_CHROOT)
+		set_fs_root(current->fs, &path);
+	if (flags & MNTNS_CHANGE_ROOT_CHDIR)
+		set_fs_pwd(current->fs, &path);
+
+	retval = 0;
+
+unlock_and_out:
+	namespace_unlock();
+	mntput(newnsroot);
+
+put_and_out:
+	path_put(&path);
+
+	return retval;
+}
+
 static void __init init_mount_tree(void)
 {
 	struct vfsmount *mnt;
 	struct mnt_namespace *ns;
 	struct path root;
-	struct file_system_type *type;
 
-	type = get_fs_type("rootfs");
-	if (!type)
-		panic("Can't find rootfs type");
-	mnt = vfs_kern_mount(type, 0, "rootfs", NULL);
-	put_filesystem(type);
-	if (IS_ERR(mnt))
+	mnt = create_rootfs(0);
+	if (!mnt)
 		panic("Can't create rootfs");
 
 	ns = create_mnt_ns(mnt);
