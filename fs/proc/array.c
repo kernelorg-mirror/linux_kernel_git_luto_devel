@@ -159,6 +159,7 @@ static inline void task_state(struct seq_file *m, struct pid_namespace *ns,
 	int g;
 	struct fdtable *fdt = NULL;
 	const struct cred *cred;
+	const struct upid *upid;
 	pid_t ppid, tpid;
 
 	rcu_read_lock();
@@ -170,12 +171,14 @@ static inline void task_state(struct seq_file *m, struct pid_namespace *ns,
 		if (tracer)
 			tpid = task_pid_nr_ns(tracer, ns);
 	}
+	upid = pid_upid_ns(pid, ns);
 	cred = get_task_cred(p);
 	seq_printf(m,
 		"State:\t%s\n"
 		"Tgid:\t%d\n"
 		"Ngid:\t%d\n"
 		"Pid:\t%d\n"
+		"Highpid:\t%llu\n"
 		"PPid:\t%d\n"
 		"TracerPid:\t%d\n"
 		"Uid:\t%d\t%d\t%d\t%d\n"
@@ -183,7 +186,7 @@ static inline void task_state(struct seq_file *m, struct pid_namespace *ns,
 		get_task_state(p),
 		task_tgid_nr_ns(p, ns),
 		task_numa_group_id(p),
-		pid_nr_ns(pid, ns),
+		upid ? upid->nr : 0, upid ? upid->highnr : 0,
 		ppid, tpid,
 		from_kuid_munged(user_ns, cred->uid),
 		from_kuid_munged(user_ns, cred->euid),
