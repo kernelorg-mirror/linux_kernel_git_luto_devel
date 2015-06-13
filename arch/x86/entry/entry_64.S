@@ -130,12 +130,18 @@ ENDPROC(native_usergs_sysret64)
  */
 
 ENTRY(entry_SYSCALL_64)
+	movq	%rsp, 0x1(%rip)
+	GLOBAL(syscall_patch_rsp_scratch)
+
+	movq	0x1(%rip), %rsp
+	GLOBAL(syscall_patch_sp0)
 	/*
 	 * Interrupts are off on entry.
 	 * We do not frame this tiny irq-off block with TRACE_IRQS_OFF/ON,
 	 * it is too small to ever cause noticeable irq latency.
 	 */
-	SWAPGS_UNSAFE_STACK
+	SWAPGS
+
 	/*
 	 * A hypervisor implementation might want to use a label
 	 * after the swapgs, so that it can do the swapgs
@@ -143,12 +149,10 @@ ENTRY(entry_SYSCALL_64)
 	 */
 GLOBAL(entry_SYSCALL_64_after_swapgs)
 
-	movq	%rsp, PER_CPU_VAR(rsp_scratch)
-	movq	PER_CPU_VAR(cpu_current_top_of_stack), %rsp
-
 	/* Construct struct pt_regs on stack */
 	pushq	$__USER_DS			/* pt_regs->ss */
-	pushq	PER_CPU_VAR(rsp_scratch)	/* pt_regs->sp */
+	pushq	0x1(%rip)			/* pt_regs->sp */
+	GLOBAL(syscall_patch_rsp_scratch_2)
 	/*
 	 * Re-enable interrupts.
 	 * We use 'rsp_scratch' as a scratch space, hence irq-off block above

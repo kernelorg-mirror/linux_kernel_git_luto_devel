@@ -1195,6 +1195,8 @@ static const unsigned int exception_stack_sizes[N_EXCEPTION_STACKS] = {
 static DEFINE_PER_CPU_PAGE_ALIGNED(char, exception_stacks
 	[(N_EXCEPTION_STACKS - 1) * EXCEPTION_STKSZ + DEBUG_STKSZ]);
 
+DECLARE_PER_CPU(unsigned long, rsp_scratch);
+
 /* May not be marked __init: used by software suspend */
 void syscall_init(void)
 {
@@ -1228,6 +1230,16 @@ void syscall_init(void)
 	wrmsrl(MSR_SYSCALL_MASK,
 	       X86_EFLAGS_TF|X86_EFLAGS_DF|X86_EFLAGS_IF|
 	       X86_EFLAGS_IOPL|X86_EFLAGS_AC|X86_EFLAGS_NT);
+
+	{
+		extern char syscall_patch_rsp_scratch[], syscall_patch_sp0[], syscall_patch_rsp_scratch_2[];
+		s32 offset = (long)&per_cpu(rsp_scratch, 0) - (long)syscall_patch_rsp_scratch;
+		text_poke(syscall_patch_rsp_scratch - 4, &offset, 4);
+		offset = (long)&per_cpu(cpu_tss, 0).x86_tss.sp0 - (long)syscall_patch_sp0;
+		text_poke(syscall_patch_sp0 - 4, &offset, 4);
+		offset = (long)&per_cpu(rsp_scratch, 0) - (long)syscall_patch_rsp_scratch_2;
+		text_poke(syscall_patch_rsp_scratch_2 - 4, &offset, 4);
+	}
 }
 
 /*
