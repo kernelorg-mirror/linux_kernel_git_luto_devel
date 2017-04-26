@@ -1005,17 +1005,25 @@ static void xen_dup_mmap(struct mm_struct *oldmm, struct mm_struct *mm)
 static void drop_other_mm_ref(void *info)
 {
 	struct mm_struct *mm = info;
-	struct mm_struct *active_mm;
 
-	active_mm = this_cpu_read(cpu_tlbstate.active_mm);
-
-	if (active_mm == mm && this_cpu_read(cpu_tlbstate.state) != TLBSTATE_OK)
+	if (this_cpu_read(cpu_tlbstate.loaded_mm) == mm) {
+		WARN_ON(this_cpu_read(cpu_tlbstate.state) == TLBSTATE_OK);
 		leave_mm(smp_processor_id());
+	}
 
 	/* If this cpu still has a stale cr3 reference, then make sure
 	   it has been flushed. */
-	if (this_cpu_read(xen_current_cr3) == __pa(mm->pgd))
+	if (this_cpu_read(xen_current_cr3) == __pa(mm->pgd)) {
+		/*
+		 * I don't get it.  If leave_mm didn't flush the state, then
+		 * we're in lazy mode, so I don't see why load_cr3() would help.
+		 *
+		 * Shouldn't this be xen_mc_flush()?
+		 */
+
 		load_cr3(swapper_pg_dir);
+		BUG();
+	}
 }
 
 static void xen_drop_mm_ref(struct mm_struct *mm)
@@ -1023,16 +1031,17 @@ static void xen_drop_mm_ref(struct mm_struct *mm)
 	cpumask_var_t mask;
 	unsigned cpu;
 
-	if (current->active_mm == mm) {
-		if (current->mm == mm)
-			load_cr3(swapper_pg_dir);
-		else
-			leave_mm(smp_processor_id());
+	if (this_cpu_read(cpu_tlbstate.loaded_mm) == mm) {
+		WARN_ON(this_cpu_read(cpu_tlbstate.state) == TLBSTATE_OK);
+		leave_mm(smp_processor_id());
 	}
 
 	/* Get the "official" set of cpus referring to our pagetable. */
 	if (!alloc_cpumask_var(&mask, GFP_ATOMIC)) {
 		for_each_online_cpu(cpu) {
+			/*
+			 * What if xen_cr3 == mm->pgd but xen_current_cr3 != mm->pgd?
+			 */
 			if (!cpumask_test_cpu(cpu, mm_cpumask(mm))
 			    && per_cpu(xen_current_cr3, cpu) != __pa(mm->pgd))
 				continue;
@@ -1059,8 +1068,10 @@ static void xen_drop_mm_ref(struct mm_struct *mm)
 #else
 static void xen_drop_mm_ref(struct mm_struct *mm)
 {
-	if (current->active_mm == mm)
-		load_cr3(swapper_pg_dir);
+	if (this_cpu_read(cpu_tlbstate.loaded_mm) == mm) {
+		WARN_ON(this_cpu_read(cpu_tlbstate.state) == TLBSTATE_OK);
+		leave_mm(smp_processor_id());
+	}
 }
 #endif
 
